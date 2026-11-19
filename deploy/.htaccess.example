@@ -1,0 +1,278 @@
+# ============================================================================
+#  .htaccess.example — Apache equivalent of deploy/nginx.conf.example
+# ============================================================================
+#
+#  Install (SAME subfolder install at /portfolio, document root /var/www/html):
+#    sudo cp deploy/.htaccess.example /var/www/html/portfolio/.htaccess
+#    sudo chown www-data:www-data /var/www/html/portfolio/.htaccess
+#    sudo chmod 644 /var/www/html/portfolio/.htaccess
+#
+#    READ THE AllowOverride NOTE BELOW FIRST, or this file will do nothing
+#    at all and you will spend an afternoon wondering why.
+#
+#  READ THIS BEFORE THE FIRST DEPLOY: deploy.sh runs
+#    rsync -a --delete dist/ /var/www/html/portfolio/
+#  and `--delete` removes every file in the target that is not in ./dist. A
+#  .htaccess copied into the deploy directory BY HAND is therefore gone again
+#  after the next ./deploy.sh. Two ways to live with that:
+#    (a) re-run the `cp` above after every deploy, or
+#    (b) keep the file in the build: copy it to public/.htaccess once
+#        (`cp deploy/.htaccess.example public/.htaccess`) and rebuild. Vite
+#        copies everything in public/ into dist/ — dotfiles included — so
+#        `npm run build` then puts the .htaccess into dist/ and `rsync --delete`
+#        keeps it. Option (b) is the one that survives on its own.
+#
+#  Assumptions:
+#    - deploy.sh copies dist/ into /var/www/html/portfolio
+#    - the site is reached at https://your-subdomain.example/portfolio/
+#    - TLS is terminated by certbot (see the README, section 6)
+#
+#  If you install somewhere other than /portfolio, change two places:
+#  RewriteBase /portfolio/ and the RewriteCond/Redirect target below.
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# AllowOverride — THE prerequisite, and the most common silent failure
+# ---------------------------------------------------------------------------
+# .htaccess is only read when the enclosing vhost says so:
+#
+#   <Directory /var/www/html>
+#       AllowOverride All
+#   </Directory>
+#
+# (or equivalently /var/www/html/portfolio, if you want it scoped tighter)
+#
+# THE TRAP: with `AllowOverride None` — the Apache default on Debian/Ubuntu
+# since 2.4 — Apache does NOT warn and does NOT error. It simply never reads
+# the file. The site still works, gzip still works if it was configured in the
+# vhost, and every line below is dead. If you change one thing here, change
+# this.
+#
+# You do not need `All` forever; the narrow setting this file actually needs is
+# `AllowOverride Options=Indexes,MultiViews,FollowSymLinks FileInfo=...` plus
+# RewriteEngine, which is painful to remember — that is why `All` is used here.
+
+# ---------------------------------------------------------------------------
+# Modules that must be enabled
+# ---------------------------------------------------------------------------
+#   sudo a2enmod rewrite headers expires deflate
+#   sudo systemctl reload apache2
+#
+# Brotli needs a third-party module and is at the bottom of this file.
+#
+# "Options not allowed here" or "FileInfo not allowed here" means AllowOverride
+# again (see above), not a typo. RewriteEngine in .htaccess additionally needs
+# AllowOverride FileInfo or All.
+
+# ---------------------------------------------------------------------------
+# Directory behaviour
+# ---------------------------------------------------------------------------
+# Never let a visitor list directory contents: without -Indexes, a directory
+# URL that happens to resolve (e.g. /portfolio/assets/) is a full file listing.
+Options -Indexes
+
+# Serve index.html for the directory. Together with mod_dir this also turns a
+# request for /portfolio into /portfolio/index.html.
+DirectoryIndex index.html
+
+# ---------------------------------------------------------------------------
+# SPA fallback — SCOPED TO THE SUBFOLDER, on purpose
+# ---------------------------------------------------------------------------
+# Same safety concern as the nginx `location /portfolio/` block: a rewrite that
+# matches EVERY path must never live above this directory, or it swallows the
+# other sites in /var/www/html. A single-page app needs a fallback to its own
+# index.html for deep links, and it needs that and nothing else.
+RewriteEngine On
+
+# The URL prefix this directory is served at. Used by the redirect below.
+RewriteBase /portfolio/
+
+# GUARD — belt and braces, and the Apache-side version of the nginx scoping.
+# If this file is ever pasted into /var/www/html/.htaccess by mistake, this
+# condition makes every request that is NOT under /portfolio/ skip all the rules
+# below untouched, instead of being rewritten to this portfolio.
+RewriteCond %{REQUEST_URI} !^/portfolio/ [NC]
+RewriteRule ^ - [L]
+
+# Redirect /portfolio (no trailing slash) to /portfolio/. mod_dir's
+# DirectorySlash normally does this already; the rule is here so the fix does
+# not depend on that. Note the trailing slash in the target — `/portfolio`
+# without it is the classic subfolder-install bug that shows up as a 404.
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^$ /portfolio/ [R=301,L]
+
+# The fallback itself: if the requested path is NOT a real file and NOT a real
+# directory, hand back the app shell and let React render the route.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.html [L]
+
+# NOTE ON SCOPE: because this file lives in /var/www/html/portfolio/, mod_rewrite
+# strips that prefix before matching, so `^ index.html` can only ever match
+# paths under /portfolio/. In the DOCUMENT ROOT's .htaccess the same line would
+# match every site on the server — which is exactly why RewriteBase and the
+# !^/portfolio/ guard above exist.
+
+# ---------------------------------------------------------------------------
+# mod_deflate — the same mime types as the nginx gzip block
+# ---------------------------------------------------------------------------
+# AddOutputFilterByType needs AllowOverride FileInfo (or All).
+# Already-compressed types (image/png, image/jpeg, application/zip) are
+# deliberately absent: deflating them costs CPU and saves nothing.
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/plain
+    AddOutputFilterByType DEFLATE text/css
+    AddOutputFilterByType DEFLATE text/xml
+    AddOutputFilterByType DEFLATE text/javascript
+    AddOutputFilterByType DEFLATE application/javascript
+    AddOutputFilterByType DEFLATE application/json
+    AddOutputFilterByType DEFLATE application/xml
+    AddOutputFilterByType DEFLATE application/rss+xml
+    AddOutputFilterByType DEFLATE image/svg+xml
+    AddOutputFilterByType DEFLATE font/woff
+    AddOutputFilterByType DEFLATE font/woff2
+</IfModule>
+
+# ---------------------------------------------------------------------------
+# mod_expires — the cache policy
+# ---------------------------------------------------------------------------
+# The two halves that matter:
+#   - hashed build assets (assets/index-<hash>.js) get ONE YEAR, because the
+#     hash is part of the filename, so the bytes behind that name never change;
+#   - index.html is NEVER cached, so a new deploy actually reaches visitors
+#     instead of hiding behind a stale HTML that points at old asset hashes.
+<IfModule mod_expires.c>
+    ExpiresActive On
+
+    # The default for anything not matched below. One month is deliberately
+    # modest; it also applies to index.html, which the Cache-Control block in
+    # the next section then overrides. Do NOT set
+    # `ExpiresDefault "access plus 1 year"` here as a shortcut — that is how
+    # index.html ends up cached for a year and nobody can receive your deploy.
+    ExpiresDefault "access plus 1 month"
+
+    # --- hashed build assets: one year ------------------------------------
+    # Vite writes files like assets/index-C_bwcQqY.js. The 8-character group
+    # after the last dash is the content hash. The precision matters: a blanket
+    # `*.js` / `*.svg` rule would also give the unhashed favicon.svg an
+    # immutable year, and then a new favicon could never reach a visitor who
+    # has already been there.
+    ExpiresByType text/javascript          "access plus 1 year"
+    ExpiresByType application/javascript   "access plus 1 year"
+    ExpiresByType text/css                  "access plus 1 year"
+    ExpiresByType image/svg+xml             "access plus 1 year"
+    ExpiresByType font/woff                 "access plus 1 year"
+    ExpiresByType font/woff2                "access plus 1 year"
+    ExpiresByType application/font-woff     "access plus 1 year"
+</IfModule>
+
+# ---------------------------------------------------------------------------
+# Cache-Control refinements — these need mod_headers
+# ---------------------------------------------------------------------------
+# mod_expires cannot emit the `immutable` token; mod_headers can. mod_headers
+# runs at fixup time, i.e. AFTER mod_expires, so `Header set` replaces the
+# Cache-Control line mod_expires just generated and leaves its `Expires` date in
+# place — which is what you should see in `curl -I`.
+<IfModule mod_headers.c>
+    # Hashed assets: one year, immutable.
+    <FilesMatch "-[A-Za-z0-9_-]{8}\.(js|css)$">
+        Header set Cache-Control "public, max-age=31536000, immutable"
+    </FilesMatch>
+
+    # The social preview image changes only when it is regenerated, so a week
+    # is plenty. FilesMatch matches the BASENAME, hence the ^ and $.
+    <FilesMatch "^og-image\.png$">
+        Header set Cache-Control "public, max-age=604800"
+    </FilesMatch>
+
+    # index.html is the app shell: never cached, only revalidated.
+    <FilesMatch "^index\.html$">
+        Header set Cache-Control "no-cache, must-revalidate"
+        Header set Pragma "no-cache"
+    </FilesMatch>
+
+    # -----------------------------------------------------------------------
+    # Security headers
+    # -----------------------------------------------------------------------
+    # Same trap as nginx `add_header`, and it is worth reading twice.
+    #
+    # nginx:   an `add_header` inside a `location` block DROPS every header
+    #          inherited from the server block.
+    # Apache:  a `Header` directive inside <FilesMatch> / <Location> /
+    #          <Directory> REPLACES the inherited set for the requests it
+    #          matches. The directives are not merged with the outer ones — the
+    #          outer ones simply stop applying to those requests.
+    #
+    # Consequence for this file: the <FilesMatch> blocks above set Cache-Control
+    # for assets and for index.html. If those responses must ALSO carry the
+    # security headers below, the headers have to be repeated inside each block
+    # (the same "repeat them in every block" fix the nginx example uses), or
+    # the security headers must be hoisted into the vhost — or into a separate
+    # file that every block includes. Both are fine; silently assuming they
+    # merge is not.
+    #
+    # `always` on Apache is not nginx's "also on error responses" keyword: here
+    # it means "apply this header to every response, including ones generated
+    # by other modules" (a 404 from mod_rewrite, for instance). Its opposite
+    # is `Header onsuccess set`, which only covers successful responses.
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Permissions-Policy "geolocation=(), microphone=(), camera=(), interest-cohort=()"
+
+    # Content Security Policy.
+    # 'unsafe-inline' in style-src is REQUIRED by this project: Tailwind injects
+    # inline <style> blocks at runtime and Framer Motion sets element .style
+    # properties directly, so a strict style-src breaks the styling.
+    # TO TIGHTEN IT LATER: drop 'unsafe-inline' and serve a per-request nonce
+    # instead (mod_csp, or Header set with a random value generated per
+    # request), and move the 12-line theme bootstrap in index.html into a real
+    # file. Only worth it once the runtime style injection is gone.
+    # script-src does NOT need 'unsafe-inline': the only inline <script> is that
+    # theme bootstrap, which has no inline event handlers.
+    Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+
+    # HSTS: only enable once HTTPS really works, otherwise you can lock
+    # yourself out of the site for months.
+    # Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+</IfModule>
+
+# ---------------------------------------------------------------------------
+# Brotli — OPTIONAL, and only if mod_brotli is installed
+# ---------------------------------------------------------------------------
+#   sudo apt-get install -y libapache2-mod-brotli
+#   sudo a2enmod brotli
+#   sudo systemctl reload apache2
+#
+# Brotli compresses better than gzip for JS/CSS, which is most of this site.
+# The <IfModule mod_brotli.c> guard is what makes the block safe: with the
+# module missing, Apache skips the block instead of refusing to start. Without
+# the guard an unknown output filter is a fatal "AH00526: Syntax error" and the
+# server does not come back up — so do not uncomment the filter without the
+# module.
+#
+# <IfModule mod_brotli.c>
+#     AddOutputFilterByType BROTLI_COMPRESS text/html
+#     AddOutputFilterByType BROTLI_COMPRESS text/plain
+#     AddOutputFilterByType BROTLI_COMPRESS text/css
+#     AddOutputFilterByType BROTLI_COMPRESS text/javascript
+#     AddOutputFilterByType BROTLI_COMPRESS application/javascript
+#     AddOutputFilterByType BROTLI_COMPRESS application/json
+#     AddOutputFilterByType BROTLI_COMPRESS image/svg+xml
+#     AddOutputFilterByType BROTLI_COMPRESS font/woff
+#     AddOutputFilterByType BROTLI_COMPRESS font/woff2
+#     AddType ".br" .br
+# </IfModule>
+
+# ---------------------------------------------------------------------------
+# Checking that it worked
+# ---------------------------------------------------------------------------
+#   sudo apachectl configtest
+#   sudo systemctl reload apache2
+#   curl -I http://127.0.0.1/portfolio/                  # 200 + the headers above
+#   curl -I http://127.0.0.1/portfolio/assets/index-*.js # immutable, 1 year
+#
+# If the security headers are missing while Expires and gzip work, read the
+# AllowOverride note at the top again — then remember that a `Header` inside
+# <FilesMatch> REPLACES the outer headers for matching files instead of adding
+# to them, so the security headers have to be repeated inside that block.

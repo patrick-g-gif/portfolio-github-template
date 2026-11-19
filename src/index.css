@@ -1,0 +1,131 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    /* keep anchored sections clear of the sticky navbar */
+    scroll-padding-top: 5.5rem;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased;
+    font-family: theme('fontFamily.sans');
+    overflow-x: hidden;
+  }
+
+  html.dark body {
+    @apply bg-noc-950 text-slate-200;
+  }
+
+  /* Visible focus ring everywhere, including for keyboard users on canvas/terminal */
+  :focus-visible {
+    outline: 2px solid theme('colors.cyan.neon');
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background: rgba(34, 211, 238, 0.3);
+    color: inherit;
+  }
+}
+
+@layer components {
+  .surface {
+    @apply border border-slate-200/80 bg-white/70 backdrop-blur-sm;
+  }
+
+  html.dark .surface {
+    @apply border-cyan-400/10 bg-noc-900/70;
+  }
+
+  .panel {
+    @apply surface rounded-2xl shadow-[0_18px_50px_-30px_rgba(10,15,28,0.9)];
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-1 font-mono text-xs uppercase tracking-wider text-cyan-700;
+  }
+
+  html.dark .chip {
+    @apply text-cyan-300;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold transition-colors;
+  }
+
+  .btn-primary {
+    @apply btn border-cyan-400/40 bg-cyan-400/10 text-cyan-700 hover:bg-cyan-400/20;
+  }
+
+  html.dark .btn-primary {
+    @apply text-cyan-300;
+  }
+
+  .btn-ghost {
+    @apply btn border-slate-300/70 text-slate-700 hover:border-cyan-400/50 hover:text-cyan-700;
+  }
+
+  html.dark .btn-ghost {
+    @apply border-noc-600 text-slate-300 hover:border-cyan-400/50 hover:text-cyan-300;
+  }
+
+  .terminal-scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .terminal-scroll::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-cyan-400/30;
+  }
+
+  .terminal-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer utilities {
+  .text-glow {
+    text-shadow: 0 0 18px rgba(34, 211, 238, 0.45);
+  }
+
+  .grid-bg {
+    background-image:
+      linear-gradient(to right, rgba(34, 211, 238, 0.06) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(34, 211, 238, 0.06) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+
+  html:not(.dark) .grid-bg {
+    background-image:
+      linear-gradient(to right, rgba(15, 118, 110, 0.07) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(15, 118, 110, 0.07) 1px, transparent 1px);
+  }
+}
+
+/* Honour the OS setting: stop every decorative animation. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

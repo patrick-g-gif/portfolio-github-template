@@ -1,0 +1,241 @@
+# ============================================================================
+#  nginx.conf.example — serve this portfolio from the /portfolio SUBFOLDER
+# ============================================================================
+#
+#  Install:
+#    sudo cp deploy/nginx.conf.example /etc/nginx/sites-available/portfolio
+#    sudo ln -s /etc/nginx/sites-available/portfolio /etc/nginx/sites-enabled/portfolio
+#    sudo nginx -t
+#    sudo systemctl reload nginx
+#
+#  If it is your only site you can instead point sites-enabled/default.conf at it.
+#  IMPORTANT: if this server already hosts other sites, keep this file SEPARATE
+#  from their configs — do not merge them, or one site's settings start
+#  affecting the others.
+#
+#  Assumptions:
+#    - deploy.sh copies dist/ into /var/www/html/portfolio
+#    - the site is reached at https://your-subdomain.example/portfolio/
+#    - TLS is terminated by certbot (see the README, section 5)
+# ============================================================================
+
+# Brotli needs the third-party ngx_brotli module:
+#   sudo apt-get install -y libnginx-mod-http-brotli-filter
+#   # or from source: https://github.com/ngx_brotli
+# The block below is harmless-but-ignored if the module is missing, as long as
+# the whole brotli block is commented out — an unknown `brotli` directive makes
+# nginx refuse to start.
+
+server {
+    # ---------------------------------------------------------------------
+    # Basic settings
+    # ---------------------------------------------------------------------
+    listen 80;
+    listen [::]:80;
+
+    # Certbot edits this file to add the 443 server block and the certificate
+    # paths. Keep port 80 reachable afterwards: it is what ACME challenges use
+    # to renew the certificate.
+    server_name your-subdomain.example;
+
+    # Certificates added by `certbot --nginx -d your-subdomain.example`:
+    # ssl_certificate     /etc/letsencrypt/live/your-subdomain.example/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/your-subdomain.example/privkey.pem;
+    # include /etc/letsencrypt/options-ssl-nginx.conf;
+    # ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    # Max upload/response body size. This portfolio is static, so a small
+    # limit is a cheap way to absorb junk requests.
+    client_max_body_size 2m;
+
+    # ---------------------------------------------------------------------
+    # Security headers — SERVER LEVEL (see the add_header gotcha below)
+    # ---------------------------------------------------------------------
+    # NOTE / IMPORTANT: `add_header` in a `location` block DROPS every header
+    # inherited from the server block. Any `location` that adds a single header
+    # therefore loses ALL of these. There are exactly two correct ways to deal
+    # with it:
+    #   (a) repeat the headers inside every location that adds one (what the
+    #       /portfolio/assets/ block below does), or
+    #   (b) hoist every header into an included file and `include` that file in
+    #       each location.
+    # Option (a) is used here so the config stays readable.
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), interest-cohort=()" always;
+
+    # Content Security Policy.
+    # 'unsafe-inline' in style-src is REQUIRED by this project: Tailwind injects
+    # inline <style> blocks at runtime and Framer Motion sets element .style
+    # properties directly, so a strict style-src breaks the styling.
+    # TO TIGHTEN IT LATER: replace 'unsafe-inline' with a nonce
+    # ($request_id or a random value generated per request) — only worth it if
+    # you stop the runtime style injection.
+    # script-src does NOT need 'unsafe-inline': the only inline <script> is the
+    # 12-line theme bootstrap in index.html, which has no inline event handlers,
+    # so it can be moved to a real file (see the README) if you want a strict CSP.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'" always;
+
+    # HSTS: only enable once HTTPS really works, otherwise you can lock
+    # yourself out of the site for months.
+    # add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # ---------------------------------------------------------------------
+    # Compression
+    # ---------------------------------------------------------------------
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 5;
+    gzip_min_length 256;
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        text/javascript
+        application/javascript
+        application/json
+        application/xml
+        application/rss+xml
+        image/svg+xml
+        font/woff
+        font/woff2;
+
+    # Brotli: better ratio than gzip for JS/CSS. Requires ngx_brotli (see the
+    # note at the top of this file). Comment the whole block out if the module
+    # is not installed.
+    brotli on;
+    brotli_static on;
+    brotli_comp_level 5;
+    brotli_types
+        text/plain
+        text/css
+        text/xml
+        text/javascript
+        application/javascript
+        application/json
+        application/xml
+        image/svg+xml
+        font/woff
+        font/woff2;
+
+    # ---------------------------------------------------------------------
+    # Logging
+    # ---------------------------------------------------------------------
+    access_log /var/log/nginx/portfolio.access.log;
+    error_log  /var/log/nginx/portfolio.error.log warn;
+
+    # ---------------------------------------------------------------------
+    # THE DOCUMENT ROOT
+    # ---------------------------------------------------------------------
+    # `root` points at the PARENT directory (/var/www/html), not at the site
+    # directory. nginx appends the request path to root, so the request
+    # /portfolio/ becomes /var/www/html/portfolio/ and the `index` directive
+    # turns that into /var/www/html/portfolio/index.html.
+    root /var/www/html;
+    index index.html;
+
+    # ALTERNATIVE — `alias` instead of `root`.
+    # Use this when the subfolder lives OUTSIDE the main document root, e.g. in
+    # /srv/www/portfolio. Note the trailing slashes: with `alias` inside a
+    # location, the location must end with `/` and the alias must end with `/`,
+    # otherwise the last path segment is lost and every request 404s.
+    #
+    # location /portfolio/ {
+    #     alias /srv/www/portfolio/;
+    #     index index.html;
+    #     try_files $uri $uri/ /portfolio/index.html;
+    # }
+
+    # ---------------------------------------------------------------------
+    # Trailing slash
+    # ---------------------------------------------------------------------
+    # Without this, a visitor typing /portfolio (no slash) gets a 404 instead of
+    # a redirect. That is the classic subfolder-install bug. The `= ` makes this
+    # an EXACT match for /portfolio only, so /portfolio/ still hits the location
+    # block below.
+    location = /portfolio {
+        return 301 /portfolio/;
+    }
+
+    # ---------------------------------------------------------------------
+    # The site itself
+    # ---------------------------------------------------------------------
+    location /portfolio/ {
+        # Serves /var/www/html/portfolio/index.html for /portfolio/.
+        try_files $uri $uri/ /portfolio/index.html;
+
+        # Never let a visitor list the directory contents.
+        autoindex off;
+
+        # index.html MUST be revalidated on every request, otherwise visitors
+        # keep getting the cached HTML (with the old asset hashes) and the site
+        # looks broken until the cache expires.
+        location = /portfolio/index.html {
+            add_header Cache-Control "no-cache, must-revalidate" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            add_header X-Frame-Options "SAMEORIGIN" always;
+            add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+            add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), interest-cohort=()" always;
+        }
+
+        # Fallback for anything that is not a file (e.g. a deep link from a
+        # single-page app): serve the app shell so React can route it.
+        error_page 404 /portfolio/index.html;
+    }
+
+    # ---------------------------------------------------------------------
+    # Hashed build assets — cache them for a year, forever
+    # ---------------------------------------------------------------------
+    # Vite writes files like assets/index-a1b2c3d4.js. The filename contains a
+    # content hash, so the bytes behind a given name never change: a one-year
+    # `immutable` cache is safe, and it is the single biggest performance win
+    # here (repeat visitors download almost nothing).
+    location /portfolio/assets/ {
+        # REPEATED on purpose — see the add_header inheritance note above.
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), interest-cohort=()" always;
+
+        # Serve a pre-compressed .br / .gz file if one is on disk, instead of
+        # compressing on every request.
+        gzip_static on;
+
+        try_files $uri =404;
+        access_log off;
+    }
+
+    # The social preview image never changes unless it is regenerated with a
+    # new name, so give it a modest cache instead of an immutable year.
+    location = /portfolio/og-image.png {
+        add_header Cache-Control "public, max-age=604800" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        try_files $uri =404;
+    }
+
+    # ---------------------------------------------------------------------
+    # Optional: basic rate limiting
+    # ---------------------------------------------------------------------
+    # Uncomment the `limit_req_zone` in the http{} block of
+    # /etc/nginx/nginx.conf (it must live at http level, not inside server):
+    #
+    #   limit_req_zone $binary_remote_addr zone=portfolio:10m rate=10r/s;
+    #
+    # ...and then use it here:
+    #
+    # limit_req zone=portfolio burst=20 nodelay;
+    #
+    # Be careful: this is a static site, so a rate limit mostly protects the
+    # server from scrapers rather than from real traffic. If you enable it,
+    # test with curl before walking away.
+
+    # ---------------------------------------------------------------------
+    # Optional: hand the default vhost a 404 instead of this site
+    # ---------------------------------------------------------------------
+    # location / {
+    #     return 404;
+    # }
+}
